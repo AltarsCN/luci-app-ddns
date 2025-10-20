@@ -51,6 +51,13 @@ scp -r root/* root@<router>:/
 - Translations reside in `po/`—run `make package/luci-app-ddns/compile` to refresh `.lmo` files.
 - Follow LuCI coding guidelines: ES5-compatible JavaScript, `L.bind`, `form.Map`, and `ui` module patterns.
 
+## Continuous Integration
+- GitHub Actions workflow `Build and Release Packages` automatically builds OpenWrt `.ipk` packages using the official OpenWrt 23.05 SDK。目前矩阵覆盖 `x86/64`、`ramips/mt7621 (mipsel_24kc)` 与 `mediatek/filogic (aarch64_generic)`，可按需扩展。
+- A companion job assembles an `.apk` package following the new OpenWrt 25 apk-based package manager layout, embedding `.PKGINFO`, `control.tar.gz`, and `data.tar.gz` so that `apk` can install the LuCI files directly (this is still not an Android application).
+- Release artifacts are organized per architecture (`release/by-arch/<arch>/...`) and bundled into `luci-app-ddns-<arch>.tar.gz`, with a consolidated `SHA256SUMS` and `INDEX.txt` published alongside the raw packages for quick mirroring.
+- Artifacts are uploaded for every push to `main`; annotated tags (`v*`) or manual runs with the `release=true` input also attach the artifacts to a GitHub Release alongside SHA256 checksums.
+- Extend the matrix in `.github/workflows/build-and-release.yml` to add more OpenWrt targets or tweak metadata (e.g., dependencies, description) if your deployment requires it.
+
 ## Contributing
 1. Fork and branch from `main`.
 2. Add UI features or provider integrations with accessible fallbacks for older browsers.
@@ -118,6 +125,13 @@ scp -r root/* root@<router>:/
 - RPC 后端实现存放在 `root/usr/share/rpcd/ucode/ddns.uc`，并调用 `ddns-scripts` 中的辅助脚本。
 - 翻译文件在 `po/` 目录，可通过 `make package/luci-app-ddns/compile` 重新生成 `.lmo`。
 - 请遵循 LuCI 的编码规范：兼容 ES5 的 JavaScript、`L.bind`、`form.Map` 与 `ui` 模块写法等。
+
+## 持续集成
+- GitHub Actions 工作流 `Build and Release Packages` 会使用官方 OpenWrt 23.05 SDK 自动编译 `.ipk` 软件包。目前矩阵覆盖 `x86/64`、`ramips/mt7621 (mipsel_24kc)` 与 `mediatek/filogic (aarch64_generic)`，可继续按需扩展。
+- 辅助任务改为按 OpenWrt 25 新的 apk 包管理器格式打包 `.apk`，生成包含 `.PKGINFO`、`control.tar.gz` 与 `data.tar.gz` 的结构，方便通过 `apk` 直接安装 LuCI 文件（仍然不是 Android 安装包）。
+- Release 构件会按架构分类（`release/by-arch/<arch>/...`），并额外打包 `luci-app-ddns-<arch>.tar.gz`，附带汇总的 `SHA256SUMS` 与 `INDEX.txt`，方便镜像或批量下载。
+- 每次推送到 `main` 都会上传构建产物；打上 `v*` 标签或在手动触发时将 `release=true`，则会将产物与 SHA256 校验和一并发布到 GitHub Release。
+- 如需构建其他 OpenWrt 目标或调整包元数据（例如依赖、描述），可在 `.github/workflows/build-and-release.yml` 中扩展矩阵配置。
 
 ## 参与贡献
 1. Fork 仓库并从 `main` 分支创建开发分支。

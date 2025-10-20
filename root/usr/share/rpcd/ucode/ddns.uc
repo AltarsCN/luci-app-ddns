@@ -159,28 +159,48 @@ const methods = {
 
 				let convertedLastUpdate;
 				if (lastUpdate > 0) {
-					const epoch = time() - _uptime + lastUpdate;
-					convertedLastUpdate = epoch2date(epoch);
-					if (checkInterval != null)
-						nextCheck = epoch2date(epoch + checkInterval);
-					nextUpdate = epoch2date(epoch + forcedUpdateInterval + checkInterval);
+					const bootEpoch = time() - _uptime;
+					const lastEpoch = bootEpoch + lastUpdate;
+					convertedLastUpdate = epoch2date(lastEpoch);
+
+					if (pid > 0 && checkInterval != null && checkInterval > 0) {
+						let elapsedChecks = _uptime - lastUpdate;
+						if (elapsedChecks < 0)
+							elapsedChecks = 0;
+						let cycles = int(elapsedChecks / checkInterval);
+						let nextCheckUptime = lastUpdate + (cycles + 1) * checkInterval;
+						nextCheck = epoch2date(bootEpoch + nextCheckUptime);
+					}
+
+					if (pid > 0 && forcedUpdateInterval != null) {
+						if (forcedUpdateInterval == 0) {
+							nextUpdate = 'Run once';
+						} else if (forcedUpdateInterval > 0) {
+							let elapsedForce = _uptime - lastUpdate;
+							if (elapsedForce < 0)
+								elapsedForce = 0;
+							if (elapsedForce >= forcedUpdateInterval) {
+								nextUpdate = 'Verify';
+							} else {
+								let cyclesForce = int(elapsedForce / forcedUpdateInterval);
+								let nextUpdateUptime = lastUpdate + (cyclesForce + 1) * forcedUpdateInterval;
+								nextUpdate = epoch2date(bootEpoch + nextUpdateUptime);
+							}
+						}
+					}
 				}
 
-				if (pid > 0 && (lastUpdate + forcedUpdateInterval + checkInterval - _uptime) <= 0) {
-					nextUpdate = 'Verify';
-				} else if (forcedUpdateInterval === 0) {
-					nextUpdate = 'Run once';
-				} else if (pid == 0 && s['enabled'] == '0') {
-					nextUpdate = 'Disabled';
-				} else if (pid == 0 && s['enabled'] != '0') {
-					nextUpdate = 'Stopped';
+				if (!nextUpdate) {
+					if (pid == 0) {
+						nextUpdate = (s['enabled'] == '0') ? 'Disabled' : 'Stopped';
+					} else if (forcedUpdateInterval == 0) {
+						nextUpdate = 'Run once';
+					}
 				}
 
 				if (!nextCheck) {
-					if (pid == 0 && s['enabled'] == '0')
-						nextCheck = 'Disabled';
-					else if (pid == 0 && s['enabled'] != '0')
-						nextCheck = 'Stopped';
+					if (pid == 0)
+						nextCheck = (s['enabled'] == '0') ? 'Disabled' : 'Stopped';
 				}
 
 				res[section] = {

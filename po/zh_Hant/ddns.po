@@ -460,10 +460,6 @@ msgstr "新的DDNS服務…"
 msgid "Next Update"
 msgstr "下次更新"
 
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1160
-msgid "Next Verify"
-msgstr "下次驗證"
-
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:226
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1148
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/status/include/70_ddns.js:40
@@ -507,49 +503,9 @@ msgstr "可選：強制使用TCP代替UDP進行DNS請求。"
 msgid "OPTIONAL: Network to use for communication"
 msgstr "可選：用於通訊的網路"
 
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1043
-msgid "Neighbor device"
-msgstr "鄰居裝置"
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1044
-msgid "Select or enter the MAC address of the IPv6 neighbor to monitor."
-msgstr "選擇或輸入要監控的 IPv6 鄰居的 MAC 位址。"
-
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:958
 msgid "OPTIONAL: Proxy-Server for detection and updates."
 msgstr "可選：用於檢測和更新的代理伺服器。"
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1084
-msgid "Select a neighbor…"
-msgstr "選擇一個鄰居…"
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1087
-msgid "Refresh"
-msgstr "重新整理"
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1095
-msgid "Unnamed device"
-msgstr "未命名裝置"
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1103
-msgid "Scanning for IPv6 neighbors…"
-msgstr "正在掃描 IPv6 鄰居…"
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1110
-msgid "No IPv6 neighbors detected yet."
-msgstr "尚未偵測到 IPv6 鄰居。"
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1114
-msgid "Failed to query IPv6 neighbors."
-msgstr "查詢 IPv6 鄰居失敗。"
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1118
-msgid "No neighbor selected."
-msgstr "尚未選擇鄰居。"
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1125
-msgid "Neighbor MAC %s"
-msgstr "鄰居 MAC %s"
 
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:937
 msgid "OPTIONAL: Use non-default DNS-Server to detect 'Registered IP'."

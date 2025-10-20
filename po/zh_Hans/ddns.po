@@ -468,10 +468,6 @@ msgstr "新建 DDNS 服务项…"
 msgid "Next Update"
 msgstr "下次更新"
 
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1160
-msgid "Next Verify"
-msgstr "下次验证"
-
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:226
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1148
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/status/include/70_ddns.js:40
@@ -514,14 +510,6 @@ msgstr "可选：强制使用 TCP 而非 UDP 请求 DNS。"
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:916
 msgid "OPTIONAL: Network to use for communication"
 msgstr "可选：用于通信的网络"
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1043
-msgid "Neighbor device"
-msgstr "邻居设备"
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1044
-msgid "Select or enter the MAC address of the IPv6 neighbor to monitor."
-msgstr "选择或输入要监控的 IPv6 邻居的 MAC 地址。"
 
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:958
 msgid "OPTIONAL: Proxy-Server for detection and updates."
@@ -826,38 +814,6 @@ msgstr "重试计数器使用的时间单位。"
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:986
 msgid ""
 "Writes detailed messages to log file. File will be truncated automatically."
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1084
-msgid "Select a neighbor…"
-msgstr "选择一个邻居…"
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1087
-msgid "Refresh"
-msgstr "刷新"
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1103
-msgid "Scanning for IPv6 neighbors…"
-msgstr "正在扫描 IPv6 邻居…"
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1110
-msgid "No IPv6 neighbors detected yet."
-msgstr "尚未检测到 IPv6 邻居。"
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1114
-msgid "Failed to query IPv6 neighbors."
-msgstr "查询 IPv6 邻居失败。"
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1095
-msgid "Unnamed device"
-msgstr "未命名设备"
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1125
-msgid "Neighbor MAC %s"
-msgstr "邻居 MAC %s"
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1118
-msgid "No neighbor selected."
-msgstr "未选择任何邻居。"
 msgstr "向日志中写入详细信息。文件将自动缩小。"
 
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:970

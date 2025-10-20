@@ -1186,6 +1186,12 @@ return view.extend({
 							selectEl.disabled = true;
 							refresh.disabled = true;
 							setStatus(_('Scanning for IPv6 neighbors…'));
+
+							var finalize = function() {
+								selectEl.disabled = false;
+								refresh.disabled = false;
+							};
+
 							return _this.fetchDeviceChoices(section_id, option.section, { force: force }).then(function(result) {
 								currentSource = result && result.source ? result.source : null;
 								rebuildSelect(result && result.choices ? result.choices : []);
@@ -1195,15 +1201,17 @@ return view.extend({
 									setStatus(_('No IPv6 neighbors detected yet.'));
 								else
 									setStatus('');
-							}).catch(function(result) {
+								finalize();
+								return result;
+							}, function(result) {
+								currentSource = null;
 								rebuildSelect([]);
 								if (result && result.message)
 									setStatus(result.message);
 								else
 									setStatus(_('Failed to query IPv6 neighbors.'));
-							}).finally(function() {
-								selectEl.disabled = false;
-								refresh.disabled = false;
+								finalize();
+								return result;
 							});
 						};
 

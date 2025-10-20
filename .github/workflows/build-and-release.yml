@@ -1,0 +1,218 @@
+name: Build and Release Packages
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Create a GitHub Release with the generated artifacts'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+env:
+  LC_ALL: C.UTF-8
+
+jobs:
+  build_ipk:
+    name: Build OpenWrt ipk (${{ matrix.sdk.arch }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk:
+          - arch: x86_64
+            target: x86/64
+            sdk_url: https://downloads.openwrt.org/releases/23.05.3/targets/x86/64/openwrt-sdk-23.05.3-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+            feeds_branch: openwrt-23.05
+          - arch: mipsel_24kc
+            target: ramips/mt7621
+            sdk_url: https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt7621/openwrt-sdk-23.05.3-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+            feeds_branch: openwrt-23.05
+          - arch: aarch64_generic
+            target: mediatek/filogic
+            sdk_url: https://downloads.openwrt.org/releases/23.05.3/targets/mediatek/filogic/openwrt-sdk-23.05.3-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz
+            feeds_branch: openwrt-23.05
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses5-dev libssl-dev python3 python3-distutils rsync unzip \
+            zlib1g-dev file wget tar bc coreutils
+
+      - name: Download OpenWrt SDK
+        run: |
+          curl -L "${{ matrix.sdk.sdk_url }}" -o sdk.tar.xz
+          mkdir -p openwrt-sdk
+          tar -Jxf sdk.tar.xz -C openwrt-sdk --strip-components=1
+
+      - name: Cache OpenWrt download directory
+        uses: actions/cache@v4
+        with:
+          path: openwrt-sdk/dl
+          key: openwrt-dl-${{ matrix.sdk.arch }}-${{ hashFiles('Makefile') }}
+          restore-keys: |
+            openwrt-dl-${{ matrix.sdk.arch }}-
+
+      - name: Configure feeds
+        working-directory: openwrt-sdk
+        run: |
+          cat <<'EOF' > feeds.conf
+          src-git packages https://github.com/openwrt/packages.git;${{ matrix.sdk.feeds_branch }}
+          src-git luci https://github.com/openwrt/luci.git;${{ matrix.sdk.feeds_branch }}
+          src-git routing https://github.com/openwrt/routing.git;${{ matrix.sdk.feeds_branch }}
+          src-git telephony https://github.com/openwrt/telephony.git;${{ matrix.sdk.feeds_branch }}
+          src-link custom $GITHUB_WORKSPACE
+          EOF
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a -p custom
+          ./scripts/feeds install luci-base ddns-scripts
+
+      - name: Configure package selection
+        working-directory: openwrt-sdk
+        run: |
+          cat <<'EOF' >> .config
+          CONFIG_PACKAGE_luci-app-ddns=y
+          CONFIG_LUCI_LANG_en=y
+          CONFIG_LUCI_LANG_zh_Hans=y
+          EOF
+          make defconfig
+
+      - name: Compile package
+        working-directory: openwrt-sdk
+        run: |
+          make package/feeds/custom/luci-app-ddns/compile V=sc
+
+      - name: Collect ipk artifacts
+        working-directory: openwrt-sdk
+        run: |
+          set -eu
+          PKG_DIR="$GITHUB_WORKSPACE/dist/ipk/${{ matrix.sdk.arch }}"
+          mkdir -p "$PKG_DIR"
+          find bin/packages -name 'luci-app-ddns*.ipk' -exec cp {} "$PKG_DIR/" \;
+          ls -1 "$PKG_DIR" > "$PKG_DIR/FILELIST.txt"
+
+      - name: Upload ipk artifact bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-ddns-${{ matrix.sdk.arch }}
+          path: dist/ipk/${{ matrix.sdk.arch }}/
+          if-no-files-found: error
+          compression-level: '0'
+
+  build_apk:
+    name: Build apk package (OpenWrt 25)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare apk payload
+        run: |
+          set -eu
+          mkdir -p dist/apk
+          STAGING=$(mktemp -d)
+          VERSION=$(git describe --tags --always --dirty)
+          echo "PKG_VERSION=$VERSION" >> $GITHUB_ENV
+
+          mkdir -p "$STAGING/data" "$STAGING/control"
+          rsync -a root/ "$STAGING/data/"
+          mkdir -p "$STAGING/data/www"
+          rsync -a htdocs/ "$STAGING/data/www/"
+
+          cat <<EOF | sed 's/^ *//' > "$STAGING/control/.PKGINFO"
+              pkgname = luci-app-ddns
+              pkgver = ${VERSION}
+              pkgdesc = LuCI support for Dynamic DNS (OpenWrt 25 apk)
+              url = https://github.com/AltarsCN/luci-app-ddns
+              arch = all
+              license = Apache-2.0
+              depend = luci-base
+              depend = ddns-scripts
+          EOF
+
+          tar --sort=name --owner=0 --group=0 --numeric-owner -czf "$STAGING/control.tar.gz" -C "$STAGING/control" .
+          tar --sort=name --owner=0 --group=0 --numeric-owner -czf "$STAGING/data.tar.gz" -C "$STAGING/data" .
+          tar --sort=name --owner=0 --group=0 --numeric-owner -cf "dist/apk/luci-app-ddns-${VERSION}-all.apk" -C "$STAGING" control.tar.gz data.tar.gz
+
+          rm -rf "$STAGING"
+
+      - name: Upload apk artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-ddns-apk
+          path: dist/apk/*.apk
+          if-no-files-found: error
+
+  release:
+    name: Publish release artifacts
+    needs:
+      - build_ipk
+      - build_apk
+    runs-on: ubuntu-22.04
+    if: |
+      startsWith(github.ref, 'refs/tags/') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Organize artifacts by architecture
+        run: |
+          set -eu
+          mkdir -p release/by-arch
+          for dir in artifacts/luci-app-ddns-*; do
+            [ -d "$dir" ] || continue
+            base=$(basename "$dir")
+            if [[ "$base" == luci-app-ddns-apk* ]]; then
+              dest="release/by-arch/all/apk"
+            else
+              arch="${base#luci-app-ddns-}"
+              dest="release/by-arch/${arch}/ipk"
+            fi
+            mkdir -p "$dest"
+            cp -a "$dir"/. "$dest"/
+          done
+          ls -R release/by-arch > release/INDEX.txt
+
+      - name: Generate checksums
+        run: |
+          set -eu
+          find release/by-arch -type f -not -name 'SHA256SUMS' -exec sha256sum {} \; | sort -k2 > release/SHA256SUMS
+
+      - name: Bundle per-architecture archives
+        run: |
+          set -eu
+          cd release/by-arch
+          for archdir in */; do
+            arch="${archdir%/}"
+            tar -czf "../luci-app-ddns-${arch}.tar.gz" "$arch"
+          done
+
+      - name: Upload release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/by-arch/**/*.ipk
+            release/by-arch/**/*.apk
+            release/*.tar.gz
+            release/INDEX.txt
+            release/SHA256SUMS
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -445,10 +445,6 @@ msgstr ""
 msgid "Next Update"
 msgstr ""
 
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1160
-msgid "Next Verify"
-msgstr ""
-
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:226
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1148
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/status/include/70_ddns.js:40
@@ -490,14 +486,6 @@ msgstr ""
 
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:916
 msgid "OPTIONAL: Network to use for communication"
-msgstr ""
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1043
-msgid "Neighbor device"
-msgstr ""
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1044
-msgid "Select or enter the MAC address of the IPv6 neighbor to monitor."
 msgstr ""
 
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:958
@@ -799,38 +787,6 @@ msgstr ""
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:986
 msgid ""
 "Writes detailed messages to log file. File will be truncated automatically."
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1084
-msgid "Select a neighbor…"
-msgstr ""
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1087
-msgid "Refresh"
-msgstr ""
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1095
-msgid "Unnamed device"
-msgstr ""
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1103
-msgid "Scanning for IPv6 neighbors…"
-msgstr ""
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1110
-msgid "No IPv6 neighbors detected yet."
-msgstr ""
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1114
-msgid "Failed to query IPv6 neighbors."
-msgstr ""
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1118
-msgid "No neighbor selected."
-msgstr ""
-
-#: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1125
-msgid "Neighbor MAC %s"
-msgstr ""
 msgstr ""
 
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:970
