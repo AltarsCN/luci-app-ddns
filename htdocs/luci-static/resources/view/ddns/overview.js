@@ -962,40 +962,67 @@ return view.extend({
 
 					o = s.taboption('advanced', form.ListValue, 'ip_source',
 						_("IP address source"),
-						_("Method used to determine the system IP-Address to send in updates"));
+						_("Method used to determine the system IP-Address to send in updates")
+						+ '<br /><small style="color:#888">'
+						+ _('IPv6 sources (PD/DHCPv6/SLAAC/EUI-64) require IPv6 mode enabled.')
+						+ '</small>');
 					o.modalonly = true;
 					o.default = 'network';
-					o.value('network', _("Network"));
-					o.value('web', _("URL"));
-					o.value('interface', _("Interface"));
-					o.value('script', _("Script"));
-					o.value('device', _("Device"));
+					// Common sources
+					o.value('network', '🌐 ' + _("Network") + ' - ' + _('Read IP from netifd'));
+					o.value('interface', '🔌 ' + _("Interface") + ' - ' + _('Read IP from physical interface'));
+					o.value('web', '🔗 ' + _("URL") + ' - ' + _('Detect via external web service'));
+					o.value('script', '📜 ' + _("Script") + ' - ' + _('Custom script'));
+					// IPv6-specific sources
+					o.value('prefix', '📡 ' + _("IPv6 Prefix (PD)") + ' - ' + _('Build from delegated prefix'));
+					o.value('dhcpv6', '🏠 ' + _("DHCPv6") + ' - ' + _('Stateful DHCPv6 address'));
+					o.value('slaac', '🔄 ' + _("SLAAC") + ' - ' + _('Stateless auto-configuration'));
+					o.value('eui64', '🔢 ' + _("EUI-64") + ' - ' + _('MAC-based IPv6 address'));
+					o.value('device', '📱 ' + _("Device") + ' - ' + _('Monitor neighbor IPv6 by MAC'));
 					o.write = function(section_id, formvalue) {
 						switch (formvalue) {
 						case 'network':
 							uci.unset('ddns', section_id, 'ip_url');
 							uci.unset('ddns', section_id, 'ip_interface');
 							uci.unset('ddns', section_id, 'ip_script');
+							uci.unset('ddns', section_id, 'ip_prefix_suffix');
 							break;
 						case 'web':
 							uci.unset('ddns', section_id, 'ip_network');
 							uci.unset('ddns', section_id, 'ip_interface');
 							uci.unset('ddns', section_id, 'ip_script');
+							uci.unset('ddns', section_id, 'ip_prefix_suffix');
 							break;
 						case 'interface':
 							uci.unset('ddns', section_id, 'ip_network');
 							uci.unset('ddns', section_id, 'ip_url');
 							uci.unset('ddns', section_id, 'ip_script');
+							uci.unset('ddns', section_id, 'ip_prefix_suffix');
 							break;
 						case 'script':
 							uci.unset('ddns', section_id, 'ip_network');
 							uci.unset('ddns', section_id, 'ip_url');
 							uci.unset('ddns', section_id, 'ip_interface');
 							uci.unset('ddns', section_id, 'ip_device');
+							uci.unset('ddns', section_id, 'ip_prefix_suffix');
 							break;
 						case 'device':
 							uci.unset('ddns', section_id, 'ip_url');
 							uci.unset('ddns', section_id, 'ip_script');
+							uci.unset('ddns', section_id, 'ip_prefix_suffix');
+							break;
+						case 'prefix':
+							uci.unset('ddns', section_id, 'ip_url');
+							uci.unset('ddns', section_id, 'ip_script');
+							uci.unset('ddns', section_id, 'ip_device');
+							break;
+						case 'dhcpv6':
+						case 'slaac':
+						case 'eui64':
+							uci.unset('ddns', section_id, 'ip_url');
+							uci.unset('ddns', section_id, 'ip_script');
+							uci.unset('ddns', section_id, 'ip_device');
+							uci.unset('ddns', section_id, 'ip_prefix_suffix');
 							break;
 						default:
 							break;
@@ -1008,6 +1035,10 @@ return view.extend({
 						_("Network"),
 						_("Defines the network to read systems IP-Address from"));
 					o.depends('ip_source', 'network');
+					o.depends('ip_source', 'prefix');
+					o.depends('ip_source', 'dhcpv6');
+					o.depends('ip_source', 'slaac');
+					o.depends('ip_source', 'eui64');
 					o.modalonly = true;
 					o.default = 'wan';
 					o.multiple = false;
@@ -1018,6 +1049,33 @@ return view.extend({
 						return base.call(this, section_id, option_index, cfgvalue);
 					};
 					ipNetworkOption = o;
+
+					o = s.taboption('advanced', form.Value, 'ip_prefix_suffix',
+						_("IPv6 Suffix"),
+						_("Interface identifier suffix to append to the IPv6 prefix (PD).")
+						+ '<br />' +
+						_("Format: ::XXXX or ::XXXX:XXXX:XXXX:XXXX (hexadecimal)")
+						+ '<br />' +
+						_("Example: If prefix is 2001:db8:1234::/48 and suffix is ::1, result is 2001:db8:1234::1"));
+					o.depends('ip_source', 'prefix');
+					o.modalonly = true;
+					o.optional = true;
+					o.placeholder = '::1';
+					o.rmempty = true;
+					o.validate = function(section_id, value) {
+						if (!value || value == '')
+							return true;
+						// Validate IPv6 suffix format: must start with :: and contain valid hex
+						if (!/^::[0-9a-fA-F:]+$/.test(value))
+							return _('Invalid IPv6 suffix format. Must start with :: followed by hexadecimal digits.');
+						// Check for valid IPv6 characters and structure
+						var parts = value.substring(2).split(':');
+						for (var i = 0; i < parts.length; i++) {
+							if (parts[i].length > 4 || !/^[0-9a-fA-F]*$/.test(parts[i]))
+								return _('Each segment must be 1-4 hexadecimal characters.');
+						}
+						return true;
+					};
 
 					o = s.taboption('advanced', form.Value, 'ip_url',
 						_("URL to detect"),
@@ -1035,6 +1093,9 @@ return view.extend({
 					o.modalonly = true;
 					o.depends('ip_source', 'interface');
 					o.depends('ip_source', 'device');
+					o.depends('ip_source', 'dhcpv6');
+					o.depends('ip_source', 'slaac');
+					o.depends('ip_source', 'eui64');
 					o.multiple = false;
 					o.default = wan_interface;
 					ipInterfaceOption = o;
@@ -1298,6 +1359,10 @@ return view.extend({
 					o.depends("ip_source", "script");
 					o.depends("ip_source", "interface");
 					o.depends("ip_source", "device");
+					o.depends("ip_source", "prefix");
+					o.depends("ip_source", "dhcpv6");
+					o.depends("ip_source", "slaac");
+					o.depends("ip_source", "eui64");
 					o.renderWidget = function(section_id, option_index, cfgvalue) {
 						var base = (widgets.NetworkSelect.prototype && widgets.NetworkSelect.prototype.renderWidget)
 							? widgets.NetworkSelect.prototype.renderWidget
@@ -1323,6 +1388,7 @@ return view.extend({
 						_("Event Network"),
 						_("Network on which the ddns-updater scripts will be started"));
 					o.depends("ip_source", "network");
+					o.depends("ip_source", "prefix");
 					o.forcewrite = true;
 					o.modalonly = true;
 					o.cfgvalue = function(section_id) {
@@ -1334,10 +1400,14 @@ return view.extend({
 
 						switch (opt) {
 						case 'network':
+						case 'prefix':
 							val = this.section.formvalue(section_id, 'ip_network');
 							break;
 						case 'interface':
 						case 'device':
+						case 'dhcpv6':
+						case 'slaac':
+						case 'eui64':
 							val = this.section.formvalue(section_id, 'ip_interface');
 							break;
 						case 'web':
