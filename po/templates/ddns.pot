@@ -130,7 +130,7 @@ msgid "DDns"
 msgstr ""
 
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:590
-msgid "DDns Service"
+msgid "DDNS Service"
 msgstr ""
 
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:373
@@ -577,7 +577,7 @@ msgid "Replaces [USERNAME] in Update-URL (URL-encoded)"
 msgstr ""
 
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:303
-msgid "Restart DDns"
+msgid "Restart DDNS"
 msgstr ""
 
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1070
@@ -728,7 +728,7 @@ msgid "Unknown"
 msgstr ""
 
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:314
-msgid "Update DDns Services List"
+msgid "Update DDNS Services List"
 msgstr ""
 
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:696

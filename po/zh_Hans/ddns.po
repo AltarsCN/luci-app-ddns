@@ -147,8 +147,8 @@ msgid "DDns"
 msgstr "动态DNS"
 
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:590
-msgid "DDns Service"
-msgstr "动态DNS 服务项"
+msgid "DDNS Service"
+msgstr "DDNS 服务项"
 
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:373
 msgid "DNS requests via TCP not supported"
@@ -600,7 +600,7 @@ msgid "Replaces [USERNAME] in Update-URL (URL-encoded)"
 msgstr "替换更新 URL（已编码 URL）中的 [USERNAME]"
 
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:303
-msgid "Restart DDns"
+msgid "Restart DDNS"
 msgstr "重启 DDNS"
 
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:1070
@@ -755,7 +755,7 @@ msgid "Unknown"
 msgstr "未知"
 
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:314
-msgid "Update DDns Services List"
+msgid "Update DDNS Services List"
 msgstr "更新 DDNS 服务列表"
 
 #: applications/luci-app-ddns/htdocs/luci-static/resources/view/ddns/overview.js:696

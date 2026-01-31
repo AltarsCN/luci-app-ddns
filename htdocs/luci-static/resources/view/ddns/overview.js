@@ -88,9 +88,67 @@ return view.extend({
 		var results = [];
 		var via = origin && (origin.interface || (origin.network ? '@' + origin.network : null));
 		var map = {};
+		var prefixes = [];
 
-		if (!response || !Array.isArray(response.devices))
+		if (!response)
 			return results;
+
+		// Extract prefixes
+		if (Array.isArray(response.prefixes)) {
+			console.log('[DDNS Debug] Raw prefixes from backend:', response.prefixes);
+			response.prefixes.forEach(function(p) {
+				if (p) {
+					var parts = String(p).split('/');
+					var addr = parts[0].toLowerCase();
+					var len = parseInt(parts[1]) || 64;
+					// Normalize prefix - keep first N bits based on length
+					// For /64, keep first 4 groups (64 bits)
+					var groups = Math.ceil(len / 16);
+					var normalized = addr.split(':').slice(0, groups).join(':');
+					console.log('[DDNS Debug] Prefix:', p, '-> normalized:', normalized);
+					prefixes.push({ raw: p, prefix: normalized, length: len });
+				}
+			});
+		}
+		console.log('[DDNS Debug] Final prefixes array:', JSON.stringify(prefixes));
+
+		if (!Array.isArray(response.devices))
+			return results;
+
+		// Helper to check if address matches any prefix
+		var matchesPrefix = function(addr) {
+			if (!addr || prefixes.length === 0) {
+				console.log('[DDNS Debug] matchesPrefix: no addr or no prefixes, return false');
+				return false;
+			}
+			var lowerAddr = String(addr).toLowerCase();
+			for (var i = 0; i < prefixes.length; i++) {
+				var idx = lowerAddr.indexOf(prefixes[i].prefix);
+				console.log('[DDNS Debug] matchesPrefix:', lowerAddr, 'vs', prefixes[i].prefix, '-> indexOf:', idx);
+				if (idx === 0)
+					return true;
+			}
+			return false;
+		};
+
+		// Helper to classify address type
+		var classifyAddress = function(addr) {
+			if (!addr)
+				return { type: 'invalid', priority: 99 };
+			var lower = String(addr).toLowerCase();
+
+			// Link-local - skip entirely
+			if (lower.indexOf('fe80:') === 0)
+				return { type: 'link-local', priority: 99 };
+
+			// ULA (fc00::/7 = fc or fd)
+			if (lower.charAt(0) === 'f' && (lower.charAt(1) === 'c' || lower.charAt(1) === 'd'))
+				return { type: 'ula', priority: 3, matchesPD: false };
+
+			// GUA - check if matches PD prefix
+			var matches = matchesPrefix(addr);
+			return { type: 'gua', priority: matches ? 1 : 2, matchesPD: matches };
+		};
 
 		response.devices.forEach(function(device) {
 			if (!device)
@@ -104,8 +162,10 @@ return view.extend({
 				entry = map[mac] = {
 					mac: mac,
 					addresses: [],
+					addressInfo: [],
 					hostname: device.hostname || null,
-					via: via || null
+					via: via || null,
+					hasPDMatch: false
 				};
 			}
 			else if (!entry.hostname && device.hostname) {
@@ -113,47 +173,58 @@ return view.extend({
 			}
 
 			if (Array.isArray(device.addresses)) {
-				var filtered = [];
-				var fallbackLocal = null;
+				var addressData = [];
 
 				device.addresses.forEach(function(addr) {
 					if (!addr)
 						return;
 
-					var lower = String(addr).toLowerCase();
-					if (lower.indexOf('fe80:') === 0)
+					var info = classifyAddress(addr);
+					if (info.type === 'link-local' || info.type === 'invalid')
 						return;
 
-					var isLocal = (lower.charAt(0) === 'f' && (lower.charAt(1) === 'c' || lower.charAt(1) === 'd'));
-					if (isLocal) {
-						if (!fallbackLocal)
-							fallbackLocal = addr;
-						return;
-					}
+					addressData.push({
+						address: addr,
+						type: info.type,
+						priority: info.priority,
+						matchesPD: info.matchesPD
+					});
 
-					if (filtered.indexOf(addr) === -1)
-						filtered.push(addr);
+					if (info.matchesPD)
+						entry.hasPDMatch = true;
 				});
 
-				if (!filtered.length && fallbackLocal)
-					filtered.push(fallbackLocal);
+				// Sort addresses by priority (PD-matching GUA first, then other GUA, then ULA)
+				addressData.sort(function(a, b) {
+					return a.priority - b.priority;
+				});
 
-				filtered.forEach(function(addr) {
-					if (entry.addresses.indexOf(addr) === -1)
-						entry.addresses.push(addr);
+				addressData.forEach(function(info) {
+					if (entry.addresses.indexOf(info.address) === -1) {
+						entry.addresses.push(info.address);
+						entry.addressInfo.push(info);
+					}
 				});
 			}
 		});
 
 		results = Object.values(map).map(L.bind(function(item) {
 			item.label = this.formatNeighborLabel(item);
+			// Store the best address (first one after sorting)
+			item.bestAddress = item.addresses.length > 0 ? item.addresses[0] : null;
+			item.bestAddressMatchesPD = item.addressInfo.length > 0 ? item.addressInfo[0].matchesPD : false;
 			return item;
 		}, this));
 
+		// Sort devices: those with PD-matching addresses first
 		results.sort(function(a, b) {
-			var left = a.hostname || a.mac;
-			var right = b.hostname || b.mac;
-			return left.localeCompare(right);
+			// Primary: has PD match
+			if (a.hasPDMatch !== b.hasPDMatch)
+				return a.hasPDMatch ? -1 : 1;
+			// Secondary: hostname vs no hostname
+			var aName = a.hostname || a.mac;
+			var bName = b.hostname || b.mac;
+			return aName.localeCompare(bName);
 		});
 
 		return results;
@@ -358,9 +429,10 @@ return view.extend({
 			.catch(function(e) { ui.addNotification(null, E('p', e.message)) });
 	},
 
-	HandleStopDDnsRule: function(m, section_id, ev) {
+	handleStopDDnsRule: function(m, section_id, ev) {
 		return fs.exec('/usr/lib/ddns/dynamic_dns_lucihelper.sh',
-							[ '-S', section_id, '--', 'start' ])
+							[ '-S', section_id, '--', 'stop' ])
+			.then(L.bind(m.load, m))
 			.then(L.bind(m.render, m))
 			.catch(function(e) { ui.addNotification(null, E('p', e.message)) });
 	},
@@ -384,7 +456,10 @@ return view.extend({
 			ddns_toggle = map.querySelector('[data-name="_toggle"]').querySelector('button'),
 			services_list = map.querySelector('[data-name="_services_list"]').querySelector('.cbi-value-field');
 
-		ddns_toggle.innerHTML = status['_enabled'] ? _('Stop DDNS') : _('Start DDNS')
+		ddns_toggle.innerHTML = status['_enabled'] ? _('Stop DDNS') : _('Start DDNS');
+		ddns_toggle.className = status['_enabled'] 
+			? 'cbi-button cbi-button-negative' 
+			: 'cbi-button cbi-button-positive';
 		services_list.innerHTML = status['_services_list'];
 
 		dom.content(ddns_enabled, function() {
@@ -472,13 +547,13 @@ return view.extend({
 
 		o = s.taboption('info', form.Button, '_toggle');
 		o.title      = '&#160;';
-		o.inputtitle = _((status['_enabled'] ? 'stop' : 'start').toUpperCase() + ' DDns');
-		o.inputstyle = 'apply';
+		o.inputtitle = status['_enabled'] ? _('Stop DDNS') : _('Start DDNS');
+		o.inputstyle = status['_enabled'] ? 'negative' : 'positive';
 		o.onclick = L.bind(this.handleToggleDDns, this, m);
 
 		o = s.taboption('info', form.Button, '_restart');
 		o.title      = '&#160;';
-		o.inputtitle = _('Restart DDns');
+		o.inputtitle = _('Restart DDNS');
 		o.inputstyle = 'apply';
 		o.onclick = L.bind(this.handleRestartDDns, this, m);
 
@@ -489,7 +564,7 @@ return view.extend({
 
 		o = s.taboption('info', form.Button, '_refresh_services');
 		o.title      = '&#160;';
-		o.inputtitle = _('Update DDns Services List');
+		o.inputtitle = _('Update DDNS Services List');
 		o.inputstyle = 'apply';
 		o.onclick = L.bind(this.handleRefreshServicesList, this, m);
 
@@ -643,10 +718,10 @@ return view.extend({
 		o.placeholder = 'https://raw.githubusercontent.com/openwrt/packages/master/net/ddns-scripts/files';
 
 		// DDns services
-		s = m.section(form.GridSection, 'service', _('Services'));
+		s = m.section(form.GridSection, 'service', _('DDNS Services'));
 		s.anonymous = true;
 		s.addremove = true;
-		s.addbtntitle = _('Add new services...');
+		s.addbtntitle = _('Add new service...');
 		s.sortable  = true;
 
 		s.handleCreateDDnsRule = function(m, name, service_name, ipv6, ev) {
@@ -714,19 +789,19 @@ return view.extend({
 			service_name.onchange = L.bind(_this.handleCheckService, _this, s2, service_name, ipv6);
 
 			m2.render().then(L.bind(function(nodes) {
-				ui.showModal(_('Add new services...'), [
-					nodes,
-					E('div', { 'class': 'right' }, [
-						E('button', {
-							'class': 'btn',
-							'click': ui.hideModal
-						}, _('Cancel')), ' ',
-						E('button', {
-							'class': 'cbi-button cbi-button-positive important',
-							'click': ui.createHandlerFn(this, 'handleCreateDDnsRule', m, name, service_name, ipv6)
-						}, _('Create service'))
-					])
-				], 'cbi-modal');
+					ui.showModal(_('Add new DDNS service'), [
+						nodes,
+						E('div', { 'class': 'right', 'style': 'margin-top: 1em;' }, [
+							E('button', {
+								'class': 'btn',
+								'click': ui.hideModal
+							}, _('Cancel')), ' ',
+							E('button', {
+								'class': 'cbi-button cbi-button-positive important',
+								'click': ui.createHandlerFn(this, 'handleCreateDDnsRule', m, name, service_name, ipv6)
+							}, _('Create service'))
+						])
+					], 'cbi-modal');
 
 				nodes.querySelector('[id="%s"] input[type="text"]'.format(name.cbid('_new_'))).focus();
 			}, this));
@@ -742,7 +817,7 @@ return view.extend({
 				},
 				stop_opt = {
 					'class': 'cbi-button cbi-button-neutral stop',
-					'click': ui.createHandlerFn(_this, 'HandleStopDDnsRule', m, section_id),
+					'click': ui.createHandlerFn(_this, 'handleStopDDnsRule', m, section_id),
 					'title': _('Stop this service'),
 				};
 
@@ -765,7 +840,7 @@ return view.extend({
 		};
 
 		s.modaltitle = function(section_id) {
-			return _('DDns Service') + ' » ' + section_id;
+			return _('DDNS Service') + ' » ' + section_id;
 		};
 
 		s.addModalOptions = function(s, section_id) {
@@ -1014,14 +1089,12 @@ return view.extend({
 						case 'prefix':
 							uci.unset('ddns', section_id, 'ip_url');
 							uci.unset('ddns', section_id, 'ip_script');
-							uci.unset('ddns', section_id, 'ip_device');
 							break;
 						case 'dhcpv6':
 						case 'slaac':
 						case 'eui64':
 							uci.unset('ddns', section_id, 'ip_url');
 							uci.unset('ddns', section_id, 'ip_script');
-							uci.unset('ddns', section_id, 'ip_device');
 							uci.unset('ddns', section_id, 'ip_prefix_suffix');
 							break;
 						default:
@@ -1101,126 +1174,183 @@ return view.extend({
 					ipInterfaceOption = o;
 
 					o = s.taboption('advanced', form.Value, 'ip_device',
-						_("Neighbor device"),
-						_("Select or enter the MAC address of the IPv6 neighbor to monitor."));
+						_('Target device'),
+						_('Identify a downstream device by MAC address, hostname, IPv4 address, or DUID. ' +
+						  'Leave empty to use the router\'s own address.'));
 					o.modalonly = true;
 					o.depends('ip_source', 'device');
-					o.datatype = 'macaddr';
-					o.rmempty = false;
-					o.placeholder = _('76:53:a3:af:2f:9e');
+					o.depends('ip_source', 'prefix');
+					o.depends('ip_source', 'dhcpv6');
+					o.depends('ip_source', 'slaac');
+					o.depends('ip_source', 'eui64');
+					o.rmempty = true;
+					o.placeholder = _('MAC / hostname / IPv4 / DUID');
 					o.validate = function(section_id, value) {
-						var mac = String(value || '').trim().toLowerCase();
-						if (!mac)
-							return _('Please enter a neighbor MAC address.');
-						if (!/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(mac))
-							return _('Invalid MAC address format.');
-						return true;
+						var v = String(value || '').trim();
+						var ipSource = uci.get('ddns', section_id, 'ip_source');
+						// Required only for 'device' source
+						if (ipSource === 'device' && !v)
+							return _('Please enter a device identifier for source "device".');
+						if (!v)
+							return true;
+						// MAC address pattern
+						if (/^([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}$/.test(v))
+							return true;
+						// IPv4 address pattern
+						if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(v))
+							return true;
+						// DUID pattern (starts with 00:0x:)
+						if (/^00:0[1-4]:/.test(v))
+							return true;
+						// Hostname pattern (alphanumeric with dashes/dots)
+						if (/^[a-zA-Z][a-zA-Z0-9\-\.]*$/.test(v))
+							return true;
+						return _('Invalid format. Accepted: MAC address, hostname, IPv4 address, or DUID.');
 					};
 					o.write = function(section_id, value) {
-						var mac = String(value || '').trim().toLowerCase();
-						if (!mac)
+						var v = String(value || '').trim();
+						if (!v)
 							return uci.unset('ddns', section_id, 'ip_device');
-						return uci.set('ddns', section_id, 'ip_device', mac);
+						return uci.set('ddns', section_id, 'ip_device', v);
 					};
 					o.remove = function(section_id) {
 						return uci.unset('ddns', section_id, 'ip_device');
 					};
 					o.renderWidget = function(section_id, option_index, cfgvalue) {
 						var option = this;
-						var base = form.Value.prototype.renderWidget ? form.Value.prototype.renderWidget.call(this, section_id, option_index, cfgvalue) : null;
-						var inputEl;
-						if (base && base.querySelector)
-							inputEl = base.querySelector('input');
-						if (!inputEl) {
-							inputEl = E('input', {
-								'class': 'cbi-input-text',
-								'name': this.cbid(section_id),
-								'id': this.cbid(section_id),
-								'value': cfgvalue || ''
-							});
-							base = E('div', {}, [ inputEl ]);
-						}
-
-						var selectEl = E('select', { 'class': 'cbi-input-select ddns-neighbor-picker-select' });
-						selectEl.appendChild(E('option', { 'value': '' }, _('Select a neighbor…')));
-
-						var refresh = E('button', {
-							'class': 'cbi-button cbi-button-neutral',
-							'type': 'button',
-							'style': 'margin-left:0.5rem;'
-						}, _('Refresh'));
-
-						var status = E('div', { 'class': 'ddns-neighbor-hint' });
-
-						var helperRow = E('div', { 'class': 'ddns-neighbor-picker-helper' }, [
-							selectEl,
-							refresh
-						]);
-
-						var wrapper = E('div', {}, [
-							base,
-							helperRow,
-							status
-						]);
-
 						var neighborMap = {};
 						var currentSource = null;
-						var savedMacNormalized = String(cfgvalue || '').trim().toLowerCase();
+						var dropdownWidget = null;
+						var choices = {};
+						var order = [];
 
+						// Format MAC address for display
 						var formatMac = function(mac) {
 							return (mac || '').toUpperCase();
 						};
 
-						var setStatus = function(message) {
-							dom.content(status, message || '');
+						// Build choice item with device icon (like DeviceSelect)
+						var buildChoiceItem = function(entry) {
+							var mac = entry.mac ? String(entry.mac).trim().toLowerCase() : '';
+							var host = entry.hostname || null;
+							var bestAddr = entry.bestAddress || null;
+							var matchesPD = entry.bestAddressMatchesPD || false;
+							var hasPDMatch = entry.hasPDMatch || false;
+
+							// Build label similar to DeviceSelect style
+							var addrDisplay = null;
+							if (bestAddr) {
+								// Color code: green for PD match (publicly accessible), orange for no match
+								var addrStyle = matchesPD ? 'color:#080;' : 'color:#a50;';
+								var addrIcon = matchesPD ? '✓' : '⚠';
+								var addrTitle = matchesPD ? _('Matches network prefix - publicly accessible') : _('Does not match network prefix - may not be publicly accessible');
+								addrDisplay = E('span', { 
+									'style': addrStyle + ' margin-left:6px;',
+									'title': addrTitle
+								}, addrIcon + ' ' + bestAddr);
+							}
+
+							// Build label similar to DeviceSelect style
+							return E('span', { 'class': 'ifacebadge' }, [
+								E('img', {
+									'src': L.resource('icons/ethernet.svg'),
+									'title': host || formatMac(mac),
+									'style': 'width:16px; height:16px; vertical-align:middle; margin-right:4px;'
+								}),
+								E('span', { 'class': 'hide-open' }, host ? host : formatMac(mac)),
+								E('span', { 'class': 'hide-close' }, [
+									host ? E('strong', {}, host + ' ') : null,
+									E('span', { 'style': 'font-family:monospace;' }, formatMac(mac)),
+									addrDisplay
+								].filter(Boolean))
+							]);
 						};
 
-						var showNeighborStatus = function(mac) {
-							var normalized = String(mac || '').trim().toLowerCase();
-							if (!normalized) {
-								setStatus(_('No neighbor selected.'));
-								return;
-							}
-							var entry = neighborMap[normalized];
-							if (entry) {
-								if (entry.hostname)
-									setStatus(String.format(_('%s · %s'), entry.hostname, formatMac(normalized)));
-								else
-									setStatus(String.format(_('Neighbor MAC %s'), formatMac(normalized)));
-							}
-							else {
-								setStatus(String.format(_('Neighbor MAC %s'), formatMac(normalized)));
-							}
-						};
+						// Initial empty choice
+						choices[''] = E('em', {}, _('-- Select neighbor device --'));
+						order.push('');
 
-						var rebuildSelect = function(list) {
+						// If we have a saved value, add it as an option
+						if (cfgvalue) {
+							var savedMac = String(cfgvalue).trim().toLowerCase();
+							choices[savedMac] = E('span', { 'class': 'ifacebadge' }, [
+								E('img', {
+									'src': L.resource('icons/ethernet.svg'),
+									'style': 'width:16px; height:16px; vertical-align:middle; margin-right:4px;'
+								}),
+								E('span', {}, formatMac(savedMac))
+							]);
+							order.push(savedMac);
+						}
+
+						// Create the dropdown widget
+						dropdownWidget = new ui.Dropdown(cfgvalue || '', choices, {
+							id: this.cbid(section_id),
+							sort: order,
+							optional: true,
+							select_placeholder: E('em', _('-- Select neighbor device --')),
+							custom_placeholder: E('em', _('Enter MAC / hostname / IPv4 / DUID...')),
+							display_items: 5,
+							dropdown_items: -1,
+							create: true,
+							create_query: '.create-item-input',
+							create_template: 'script[type="item-template"]'
+						});
+
+						var dropdownEl = dropdownWidget.render();
+
+						// Refresh button
+						var refresh = E('button', {
+							'class': 'cbi-button cbi-button-action',
+							'type': 'button',
+							'style': 'margin-left:8px; flex-shrink:0;'
+						}, [ _('Scan') ]);
+
+						// Status display
+						var status = E('div', {
+							'class': 'cbi-value-description',
+							'style': 'margin-top:8px;'
+						});
+
+						// Control row with dropdown and refresh button
+						var controlRow = E('div', {
+							'class': 'control-group',
+							'style': 'display:flex; align-items:center; flex-wrap:wrap; gap:4px;'
+						}, [
+							E('div', { 'style': 'flex:1; min-width:200px;' }, dropdownEl),
+							refresh
+						]);
+
+						var wrapper = E('div', { 'style': 'width:100%;' }, [
+							controlRow,
+							status
+						]);
+
+						// Update dropdown choices
+						var rebuildDropdown = function(list) {
 							neighborMap = {};
-							while (selectEl.options.length > 1)
-								selectEl.remove(1);
+							var newChoices = {};
+							var newValues = [];
+
+							// Add device options
 							list.forEach(function(entry) {
 								var mac = entry.mac ? String(entry.mac).trim().toLowerCase() : '';
 								if (!mac)
 									return;
 								neighborMap[mac] = entry;
-								var labelParts = [];
-								var host = entry.hostname || entry.label || _('Unnamed device');
-								labelParts.push(host);
-								labelParts.push(formatMac(mac));
-								if (Array.isArray(entry.addresses) && entry.addresses.length > 0)
-									labelParts.push(entry.addresses[0]);
-								if (entry.via)
-									labelParts.push(entry.via);
-								selectEl.appendChild(E('option', { 'value': mac }, labelParts.join(' | ')));
+								newChoices[mac] = buildChoiceItem(entry);
+								newValues.push(mac);
 							});
-							var currentMac = String(inputEl.value || '').trim().toLowerCase();
-							if (currentMac && neighborMap[currentMac])
-								selectEl.value = currentMac;
-							else
-								selectEl.value = '';
-							if (currentMac)
-								showNeighborStatus(currentMac);
+
+							// Update dropdown using clearChoices + addChoices
+							if (dropdownWidget) {
+								dropdownWidget.clearChoices();
+								if (newValues.length > 0)
+									dropdownWidget.addChoices(newValues, newChoices);
+							}
 						};
 
+						// Sync related options
 						var syncRelatedOptions = function(entry) {
 							if (!entry)
 								return;
@@ -1243,90 +1373,83 @@ return view.extend({
 							}
 						};
 
+						// Perform refresh/scan
 						var performRefresh = function(force) {
-							selectEl.disabled = true;
 							refresh.disabled = true;
-							setStatus(_('Scanning for IPv6 neighbors…'));
-
-							var finalize = function() {
-								selectEl.disabled = false;
-								refresh.disabled = false;
-							};
+							dom.content(status, E('em', { 'class': 'spinning' }, _('Scanning for IPv6 neighbors…')));
 
 							return _this.fetchDeviceChoices(section_id, option.section, { force: force }).then(function(result) {
 								currentSource = result && result.source ? result.source : null;
-								rebuildSelect(result && result.choices ? result.choices : []);
-								if (result && result.message)
-									setStatus(result.message);
-								else if (selectEl.options.length <= 1)
-									setStatus(_('No IPv6 neighbors detected yet.'));
-								else
-									setStatus('');
-								finalize();
+								rebuildDropdown(result && result.choices ? result.choices : []);
+
+								if (result && result.message) {
+									dom.content(status, result.message);
+								} else if (Object.keys(neighborMap).length === 0) {
+									dom.content(status, E('em', {}, _('No IPv6 neighbors detected. Try scanning again.')));
+								} else {
+									var count = Object.keys(neighborMap).length;
+									dom.content(status, E('span', { 'style': 'color:#080;' }, 
+										'✓ ' + String.format(_('Found %d device(s)'), count)));
+								}
+								refresh.disabled = false;
 								return result;
-							}, function(result) {
+							}, function(err) {
 								currentSource = null;
-								rebuildSelect([]);
-								if (result && result.message)
-									setStatus(result.message);
-								else
-									setStatus(_('Failed to query IPv6 neighbors.'));
-								finalize();
-								return result;
+								rebuildDropdown([]);
+								dom.content(status, E('span', { 'style': 'color:#c00;' }, 
+									'✗ ' + _('Failed to query IPv6 neighbors.')));
+								refresh.disabled = false;
+								return err;
 							});
 						};
 
+						// Store refresh function for external triggers
 						this.neighborWidgets = this.neighborWidgets || {};
 						this.neighborWidgets[section_id] = performRefresh;
 
-						selectEl.addEventListener('change', function() {
-							var mac = String(this.value || '').trim().toLowerCase();
-							if (!mac)
-								return;
-							inputEl.value = formatMac(mac);
-							if (typeof inputEl.dispatchEvent === 'function') {
-								var changeEvt = null;
-								if (typeof Event === 'function') {
-									try {
-										changeEvt = new Event('change', { bubbles: true });
-									}
-									catch (err) {
-										changeEvt = null;
-									}
-								}
-								if (!changeEvt && typeof document === 'object' && document && typeof document.createEvent === 'function') {
-									var legacyEvt = document.createEvent('HTMLEvents');
-									legacyEvt.initEvent('change', true, true);
-									changeEvt = legacyEvt;
-								}
-								if (changeEvt)
-									inputEl.dispatchEvent(changeEvt);
+						// Handle dropdown value change
+						dropdownEl.addEventListener('cbi-dropdown-change', function(ev) {
+							var selectedValue = dropdownWidget.getValue();
+							if (selectedValue && neighborMap[selectedValue]) {
+								syncRelatedOptions(neighborMap[selectedValue]);
 							}
-							var entry = neighborMap[mac];
-							syncRelatedOptions(entry);
-							savedMacNormalized = mac;
-							showNeighborStatus(mac);
 						});
 
+						// Refresh button click handler
 						refresh.addEventListener('click', function(ev) {
 							ev.preventDefault();
 							performRefresh(true);
 						});
 
+						// Initial scan
 						performRefresh(false);
 
-						var savedMac = String(cfgvalue || '').trim().toLowerCase();
-						if (savedMac) {
-							inputEl.value = formatMac(savedMac);
-							savedMacNormalized = savedMac;
-							showNeighborStatus(savedMacNormalized);
+						// Show initial status
+						if (!cfgvalue) {
+							dom.content(status, E('em', {}, _('Click "Scan" to discover IPv6 neighbor devices.')));
 						}
-						else
-							setStatus(_('No neighbor selected.'));
 
 						return wrapper;
 					};
 					ipDeviceOption = o;
+
+					// Device identifier type selection
+					o = s.taboption('advanced', form.ListValue, 'ip_device_type',
+						_('Device identifier type'),
+						_('How to identify the target device. Auto-detect works for most cases.'));
+					o.modalonly = true;
+					o.depends('ip_source', 'device');
+					o.depends('ip_source', 'prefix');
+					o.depends('ip_source', 'dhcpv6');
+					o.depends('ip_source', 'slaac');
+					o.depends('ip_source', 'eui64');
+					o.value('auto', _('Auto-detect'));
+					o.value('mac', _('MAC address'));
+					o.value('hostname', _('Hostname'));
+					o.value('ipv4', _('IPv4 address'));
+					o.value('duid', _('DUID (DHCPv6)'));
+					o.default = 'auto';
+					o.rmempty = true;
 
 					if (ipInterfaceOption) {
 						ipInterfaceOption.onchange = L.bind(function(section_id) {
@@ -1668,7 +1791,7 @@ return view.extend({
 		o.editable = true;
 		o.modalonly = false;
 
-		o = s.option(form.DummyValue, '_cfg_update', _('Last Update') + " |<br />" + _('Next Verify') + " |<br />" + _('Next Update'));
+		o = s.option(form.DummyValue, '_cfg_update', _('Last Update') + "<br />" + _('Next Check') + "<br />" + _('Next Update'));
 		o.rawhtml   = true;
 		o.modalonly = false;
 		o.textvalue = function(section_id) {
