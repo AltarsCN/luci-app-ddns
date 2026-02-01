@@ -95,7 +95,6 @@ return view.extend({
 
 		// Extract prefixes
 		if (Array.isArray(response.prefixes)) {
-			console.log('[DDNS Debug] Raw prefixes from backend:', response.prefixes);
 			response.prefixes.forEach(function(p) {
 				if (p) {
 					var parts = String(p).split('/');
@@ -105,27 +104,21 @@ return view.extend({
 					// For /64, keep first 4 groups (64 bits)
 					var groups = Math.ceil(len / 16);
 					var normalized = addr.split(':').slice(0, groups).join(':');
-					console.log('[DDNS Debug] Prefix:', p, '-> normalized:', normalized);
 					prefixes.push({ raw: p, prefix: normalized, length: len });
 				}
 			});
 		}
-		console.log('[DDNS Debug] Final prefixes array:', JSON.stringify(prefixes));
 
 		if (!Array.isArray(response.devices))
 			return results;
 
 		// Helper to check if address matches any prefix
 		var matchesPrefix = function(addr) {
-			if (!addr || prefixes.length === 0) {
-				console.log('[DDNS Debug] matchesPrefix: no addr or no prefixes, return false');
+			if (!addr || prefixes.length === 0)
 				return false;
-			}
 			var lowerAddr = String(addr).toLowerCase();
 			for (var i = 0; i < prefixes.length; i++) {
-				var idx = lowerAddr.indexOf(prefixes[i].prefix);
-				console.log('[DDNS Debug] matchesPrefix:', lowerAddr, 'vs', prefixes[i].prefix, '-> indexOf:', idx);
-				if (idx === 0)
+				if (lowerAddr.indexOf(prefixes[i].prefix) === 0)
 					return true;
 			}
 			return false;
@@ -137,16 +130,22 @@ return view.extend({
 				return { type: 'invalid', priority: 99 };
 			var lower = String(addr).toLowerCase();
 
-			// Link-local - skip entirely
+			// Link-local - always skip
 			if (lower.indexOf('fe80:') === 0)
 				return { type: 'link-local', priority: 99 };
 
-			// ULA (fc00::/7 = fc or fd)
-			if (lower.charAt(0) === 'f' && (lower.charAt(1) === 'c' || lower.charAt(1) === 'd'))
-				return { type: 'ula', priority: 3, matchesPD: false };
-
-			// GUA - check if matches PD prefix
+			// Check if matches any network prefix first
 			var matches = matchesPrefix(addr);
+
+			// Determine address type
+			var isULA = (lower.charAt(0) === 'f' && (lower.charAt(1) === 'c' || lower.charAt(1) === 'd'));
+
+			if (isULA) {
+				// ULA: priority 1 if matches prefix, otherwise 3
+				return { type: 'ula', priority: matches ? 1 : 3, matchesPD: matches };
+			}
+
+			// GUA: priority 1 if matches prefix, otherwise 2
 			return { type: 'gua', priority: matches ? 1 : 2, matchesPD: matches };
 		};
 
@@ -450,13 +449,66 @@ return view.extend({
 			.then(L.bind(m.render, m));
 	},
 
+	handleRenameDDnsService: function(m, section_id, new_name, ev) {
+		if (!new_name || new_name === section_id)
+			return;
+
+		// Check if name already exists
+		if (uci.get('ddns', new_name) != null) {
+			ui.addNotification(null, E('p', _('The service name is already used')));
+			return;
+		}
+
+		// Validate name format
+		if (!/^[a-zA-Z0-9_]+$/.test(new_name)) {
+			ui.addNotification(null, E('p', _('Invalid name format. Use only letters, numbers and underscores.')));
+			return;
+		}
+
+		// Stop the service first if running
+		return fs.exec('/usr/lib/ddns/dynamic_dns_lucihelper.sh', ['-S', section_id, '--', 'stop'])
+			.then(function() {
+				// Get all options from old section
+				var options = uci.sections('ddns', 'service').find(function(s) {
+					return s['.name'] === section_id;
+				});
+
+				if (!options) {
+					throw new Error(_('Service not found'));
+				}
+
+				// Create new section with new name
+				uci.add('ddns', 'service', new_name);
+
+				// Copy all options to new section
+				Object.keys(options).forEach(function(key) {
+					if (!key.startsWith('.')) {
+						uci.set('ddns', new_name, key, options[key]);
+					}
+				});
+
+				// Remove old section
+				uci.remove('ddns', section_id);
+
+				return uci.save();
+			})
+			.then(L.bind(function() {
+				ui.hideModal();
+				return m.load();
+			}, this))
+			.then(L.bind(m.render, m))
+			.catch(function(e) { 
+				ui.addNotification(null, E('p', e.message)); 
+			});
+	},
+
 	poll_status: function(map, data) {
 		var status = data[1] || [], service = data[0] || [], rows = map.querySelectorAll('.cbi-section-table-row[data-sid]'),
 			ddns_enabled = map.querySelector('[data-name="_enabled"]').querySelector('.cbi-value-field'),
 			ddns_toggle = map.querySelector('[data-name="_toggle"]').querySelector('button'),
 			services_list = map.querySelector('[data-name="_services_list"]').querySelector('.cbi-value-field');
 
-		ddns_toggle.innerHTML = status['_enabled'] ? _('Stop DDNS') : _('Start DDNS');
+		ddns_toggle.innerHTML = status['_enabled'] ? _('Stop') : _('Start');
 		ddns_toggle.className = status['_enabled'] 
 			? 'cbi-button cbi-button-negative' 
 			: 'cbi-button cbi-button-positive';
@@ -530,127 +582,122 @@ return view.extend({
 		s.tab('info', _('Information'));
 		s.tab('global', _('Global Settings'));
 
-		o = s.taboption('info', form.DummyValue, '_version', _('Dynamic DNS Version'));
+		// ========== Version ==========
+		o = s.taboption('info', form.DummyValue, '_version', _('Version'));
 		o.cfgvalue = function() {
-			return status[this.option];
+			return status['_version'] || _('Unknown');
 		};
 
-		o = s.taboption('info', form.DummyValue, '_enabled', _('State'));
+		// ========== Status ==========
+		o = s.taboption('info', form.DummyValue, '_status', _('Status'));
+		o.rawhtml = true;
 		o.cfgvalue = function() {
-			var res = status[this.option];
-			if (!res) {
-				this.description = _("Currently DDNS updates are not started at boot or on interface events.") + "<br />" +
-				_("This is the default if you run DDNS scripts by yourself (i.e. via cron with force_interval set to '0')")
+			var isEnabled = status['_enabled'];
+			if (isEnabled) {
+				return '<span style="color:#080; font-weight:bold;">\u25CF ' + _('Running') + '</span>';
+			} else {
+				return '<span style="color:#c00; font-weight:bold;">\u25CB ' + _('Stopped') + '</span>' +
+					'<br /><small style="color:#666;">' + _("DDNS updates are not started at boot or on interface events.") + '</small>';
 			}
-			return res ? _('DDNS Autostart enabled') : _('DDNS Autostart disabled')
 		};
 
+		// ========== Control Buttons ==========
 		o = s.taboption('info', form.Button, '_toggle');
-		o.title      = '&#160;';
-		o.inputtitle = status['_enabled'] ? _('Stop DDNS') : _('Start DDNS');
+		o.title = _('Actions');
+		o.inputtitle = status['_enabled'] ? _('Stop') : _('Start');
 		o.inputstyle = status['_enabled'] ? 'negative' : 'positive';
 		o.onclick = L.bind(this.handleToggleDDns, this, m);
 
 		o = s.taboption('info', form.Button, '_restart');
-		o.title      = '&#160;';
-		o.inputtitle = _('Restart DDNS');
-		o.inputstyle = 'apply';
+		o.title = '&#160;';
+		o.inputtitle = _('Restart');
+		o.inputstyle = 'action';
 		o.onclick = L.bind(this.handleRestartDDns, this, m);
 
-		o = s.taboption('info', form.DummyValue, '_services_list', _('Services list last update'));
+		// ========== Services List ==========
+		o = s.taboption('info', form.DummyValue, '_services_list', _('Services List'));
 		o.cfgvalue = function() {
-			return status[this.option];
+			return status['_services_list'] || _('Never');
 		};
 
 		o = s.taboption('info', form.Button, '_refresh_services');
-		o.title      = '&#160;';
-		o.inputtitle = _('Update DDNS Services List');
-		o.inputstyle = 'apply';
+		o.title = '&#160;';
+		o.inputtitle = _('Update');
+		o.inputstyle = 'action';
 		o.onclick = L.bind(this.handleRefreshServicesList, this, m);
 
-		// DDns hints
+		// ========== System Capabilities ==========
+		o = s.taboption('info', form.DummyValue, '_capabilities', _('Capabilities'));
+		o.rawhtml = true;
+		o.cfgvalue = function() {
+			var capabilities = [
+				{ key: 'has_ipv6', label: 'IPv6' },
+				{ key: 'has_ssl', label: 'HTTPS' },
+				{ key: 'has_bindnet', label: _('Bind Network') },
+				{ key: 'has_proxy', label: _('Proxy') },
+				{ key: 'has_bindhost', label: 'DNS/TCP' },
+				{ key: 'has_dnsserver', label: _('Custom DNS') }
+			];
 
-		if (!env['has_ipv6']) {
-			o = s.taboption('info', form.DummyValue, '_no_ipv6');
-			o.rawhtml  = true;
-			o.title = '<b>' + _("IPv6 not supported") + '</b>';
-			o.cfgvalue = function() { return _("IPv6 is not supported by this system") + "<br />" +
-			_("Please follow the instructions on OpenWrt's homepage to enable IPv6 support") + "<br />" +
-			_("or update your system to the latest OpenWrt Release")};
-		}
+			var html = '';
+			capabilities.forEach(function(cap) {
+				var supported = !!env[cap.key];
+				var icon = supported ? '\u2713' : '\u2717';
+				var color = supported ? '#080' : '#c00';
+				html += '<span style="display:inline-block; margin-right:16px; white-space:nowrap;">' +
+					'<span style="color:' + color + '; font-weight:bold; margin-right:3px;">' + icon + '</span>' +
+					cap.label + '</span>';
+			});
 
-		if (!env['has_ssl']) {
-			o = s.taboption('info', form.DummyValue, '_no_https');
-			o.titleref = L.url("admin", "system", "package-manager")
-			o.rawhtml  = true;
-			o.title = '<b>' + _("HTTPS not supported") + '</b>';
-			o.cfgvalue = function() { return _("Neither GNU Wget with SSL nor cURL is installed to support secure updates via HTTPS protocol.") +
-			"<br />- " +
-			_("You should install 'wget' or 'curl' or 'uclient-fetch' with 'libustream-*ssl' package.") +
-			"<br />- " +
-			_("In some versions cURL/libcurl in OpenWrt is compiled without proxy support.")};
-		}
+			// CA certs
+			if (env['has_ssl']) {
+				var hasCACerts = !!env['has_cacerts'];
+				var caIcon = hasCACerts ? '\u2713' : '\u26A0';
+				var caColor = hasCACerts ? '#080' : '#a50';
+				html += '<span style="display:inline-block; margin-right:16px; white-space:nowrap;">' +
+					'<span style="color:' + caColor + '; font-weight:bold; margin-right:3px;">' + caIcon + '</span>' +
+					_('CA Certs') + '</span>';
+			}
 
-		if (!env['has_bindnet']) {
-			o = s.taboption('info', form.DummyValue, '_no_bind_network');
-			o.titleref = L.url("admin", "system", "package-manager")
-			o.rawhtml  = true;
-			o.title = '<b>' + _("Binding to a specific network not supported") + '</b>';
-			o.cfgvalue = function() { return _("Neither GNU Wget with SSL nor cURL is installed to select a network to use for communication.") +
-			"<br />- " +
-			_("This is only a problem with multiple WAN interfaces and your DDNS provider is unreachable via one of them.") +
-			"<br />- " +
-			_("You should install 'wget' or 'curl' package.") +
-			"<br />- " +
-			_("GNU Wget will use the IP of given network, cURL will use the physical interface.") +
-			"<br />- " +
-			_("In some versions cURL/libcurl in OpenWrt is compiled without proxy support.")};
-		}
+			return html;
+		};
 
-		if (!env['has_proxy']) {
-			o = s.taboption('info', form.DummyValue, '_no_proxy');
-			o.titleref = L.url("admin", "system", "package-manager")
-			o.rawhtml  = true;
-			o.title = '<b>' + _("cURL without Proxy Support") + '</b>';
-			o.cfgvalue = function() { return _("cURL is installed, but libcurl was compiled without proxy support.") +
-			"<br />- " +
-			_("You should install 'wget' or 'uclient-fetch' package or replace libcurl.") +
-			"<br />- " +
-			_("In some versions cURL/libcurl in OpenWrt is compiled without proxy support.")};
-		}
+		// ========== Warnings (only if missing features) ==========
+		var hasWarnings = !env['has_ipv6'] || !env['has_ssl'] || !env['has_bindnet'] || 
+			!env['has_proxy'] || !env['has_bindhost'] || !env['has_dnsserver'] ||
+			(env['has_ssl'] && !env['has_cacerts']);
 
-		if (!env['has_bindhost']) {
-			o = s.taboption('info', form.DummyValue, '_no_dnstcp');
-			o.titleref = L.url("admin", "system", "package-manager")
-			o.rawhtml  = true;
-			o.title = '<b>' + _("DNS requests via TCP not supported") + '</b>';
-			o.cfgvalue = function() { return _("BusyBox's nslookup and hostip do not support TCP " +
-				"instead of the default UDP when sending requests to the DNS server!") +
-				"<br />- " +
-				_("Install 'bind-host' or 'knot-host' or 'drill' package if you know you need TCP for DNS requests.")};
-		}
+		if (hasWarnings) {
+			o = s.taboption('info', form.DummyValue, '_warnings', _('Notices'));
+			o.rawhtml = true;
+			o.cfgvalue = function() {
+				var warnings = [];
+				var pkgLink = L.url("admin", "system", "opkg");
 
-		if (!env['has_dnsserver']) {
-			o = s.taboption('info', form.DummyValue, '_no_dnsserver');
-			o.titleref = L.url("admin", "system", "package-manager")
-			o.rawhtml  = true;
-			o.title = '<b>' + _("Using specific DNS Server not supported") + '</b>';
-			o.cfgvalue = function() { return _("BusyBox's nslookup in the current compiled version " +
-			"does not handle given DNS Servers correctly!") +
-			"<br />- " +
-			_("You should install 'bind-host' or 'knot-host' or 'drill' or 'hostip' package, " +
-			"if you need to specify a DNS server to detect your registered IP.")};
-		}
+				if (!env['has_ipv6'])
+					warnings.push('<b>IPv6:</b> ' + _('Not supported'));
+				if (!env['has_ssl'])
+					warnings.push('<b>HTTPS:</b> ' + _("Install 'wget', 'curl', or 'uclient-fetch' with SSL"));
+				if (!env['has_bindnet'])
+					warnings.push('<b>' + _('Bind Network') + ':</b> ' + _("Install 'wget' or 'curl'"));
+				if (!env['has_proxy'])
+					warnings.push('<b>' + _('Proxy') + ':</b> ' + _("Install 'wget' or 'uclient-fetch'"));
+				if (!env['has_bindhost'])
+					warnings.push('<b>DNS/TCP:</b> ' + _("Install 'bind-host', 'knot-host', or 'drill'"));
+				if (!env['has_dnsserver'])
+					warnings.push('<b>' + _('Custom DNS') + ':</b> ' + _("Install 'bind-host', 'knot-host', 'drill', or 'hostip'"));
+				if (env['has_ssl'] && !env['has_cacerts'])
+					warnings.push('<b>' + _('CA Certs') + ':</b> ' + _("Install 'ca-certificates'"));
 
-		if (env['has_ssl'] && !env['has_cacerts']) {
-			o = s.taboption('info', form.DummyValue, '_no_certs');
-			o.titleref = L.url("admin", "system", "package-manager")
-			o.rawhtml  = true;
-			o.title = '<b>' + _("No certificates found") + '</b>';
-			o.cfgvalue = function() { return _("If using secure communication you should verify server certificates!") +
-			"<br />- " +
-			_("Install 'ca-certificates' package or needed certificates " +
-				"by hand into /etc/ssl/certs default directory")};
+				var html = '<div style="background:#fff3cd; border-radius:4px; padding:8px 12px; color:#856404;">';
+				warnings.forEach(function(w) {
+					html += '<div style="margin:4px 0;">\u26A0 ' + w + '</div>';
+				});
+				html += '<div style="margin-top:8px; padding-top:8px; border-top:1px solid #ffc107;">' +
+					'<a href="' + pkgLink + '">' + _('Go to Software page') + '</a></div>';
+				html += '</div>';
+				return html;
+			};
 		}
 
 		// Advanced Configuration Section
@@ -721,7 +768,7 @@ return view.extend({
 		s = m.section(form.GridSection, 'service', _('DDNS Services'));
 		s.anonymous = true;
 		s.addremove = true;
-		s.addbtntitle = _('Add new service...');
+		s.addbtntitle = _('Add new Service...');
 		s.sortable  = true;
 
 		s.handleCreateDDnsRule = function(m, name, service_name, ipv6, ev) {
@@ -757,7 +804,7 @@ return view.extend({
 			name = s2.option(form.Value, 'name', _('Name'));
 			name.rmempty = false;
 			name.datatype = 'uciname';
-			name.placeholder = _('New DDns Service…');
+			name.placeholder = _('New DDNS Service…');
 			name.validate = function(section_id, value) {
 				if (uci.get('ddns', value) != null)
 					return _('The service name is already used');
@@ -789,7 +836,7 @@ return view.extend({
 			service_name.onchange = L.bind(_this.handleCheckService, _this, s2, service_name, ipv6);
 
 			m2.render().then(L.bind(function(nodes) {
-					ui.showModal(_('Add new DDNS service'), [
+					ui.showModal(_('Add new DDNS Service'), [
 						nodes,
 						E('div', { 'class': 'right', 'style': 'margin-top: 1em;' }, [
 							E('button', {
@@ -799,7 +846,7 @@ return view.extend({
 							E('button', {
 								'class': 'cbi-button cbi-button-positive important',
 								'click': ui.createHandlerFn(this, 'handleCreateDDnsRule', m, name, service_name, ipv6)
-							}, _('Create service'))
+							}, _('Create Service'))
 						])
 					], 'cbi-modal');
 
@@ -872,6 +919,56 @@ return view.extend({
 				s.tab('advanced', _('Advanced Settings'));
 				s.tab('timer', _('Timer Settings'));
 				s.tab('logview', _('Log File Viewer'));
+
+				// Rename service
+				o = s.taboption('basic', form.Value, '_rename', _('Service Name'));
+				o.modalonly = true;
+				o.rmempty = true;
+				o.datatype = 'uciname';
+				o.placeholder = section_id;
+				o.description = _('Enter a new name to rename this service');
+				o.cfgvalue = function() { return section_id; };
+				o.write = function() { }; // Don't write, handled by button
+				o.validate = function(section, value) {
+					if (!value || value === section_id)
+						return true;
+					if (uci.get('ddns', value) != null)
+						return _('The service name is already used');
+					return true;
+				};
+				o.renderWidget = function(section, option_index, cfgvalue) {
+					var inputEl = E('input', {
+						'id': this.cbid(section),
+						'type': 'text',
+						'class': 'cbi-input-text',
+						'value': cfgvalue || section_id,
+						'placeholder': section_id,
+						'style': 'width:auto; min-width:200px;'
+					});
+
+					var btnEl = E('button', {
+						'class': 'cbi-button cbi-button-action',
+						'style': 'margin-left:8px;',
+						'click': ui.createHandlerFn(_this, function(ev) {
+							var newName = inputEl.value.trim();
+							if (!newName || newName === section_id) {
+								ui.addNotification(null, E('p', _('Please enter a different name')));
+								return;
+							}
+							if (!/^[a-zA-Z0-9_]+$/.test(newName)) {
+								ui.addNotification(null, E('p', _('Invalid name. Use only letters, numbers and underscores.')));
+								return;
+							}
+							if (uci.get('ddns', newName) != null) {
+								ui.addNotification(null, E('p', _('The service name is already used')));
+								return;
+							}
+							return _this.handleRenameDDnsService(s.map.parent || s.map, section_id, newName, ev);
+						})
+					}, _('Rename'));
+
+					return E('div', { 'style': 'display:flex; align-items:center;' }, [inputEl, btnEl]);
+				};
 
 				o = s.taboption('basic', form.Flag, 'enabled',
 					_('Enabled'),
@@ -955,8 +1052,8 @@ return view.extend({
 
 				var service_switch = s.taboption('basic', form.Button, '_switch_proto');
 				service_switch.modalonly  = true;
-				service_switch.title      = _('Really switch service?');
-				service_switch.inputtitle = _('Switch service');
+				service_switch.title      = _('Really switch Service?');
+				service_switch.inputtitle = _('Switch Service');
 				service_switch.inputstyle = 'apply';
 				service_switch.onclick = L.bind(function(ev) {
 					if (!s.service_supported) return;
@@ -1020,20 +1117,81 @@ return view.extend({
 					o.modalonly = true;
 					o.rmempty = false;
 
+					// Authentication type for services that support multiple methods
+					var auth_type = s.taboption('basic', form.ListValue, '_auth_type',
+						_("Authentication Type"),
+						_("Select authentication method for API-based services like Cloudflare"));
+					auth_type.modalonly = true;
+					auth_type.value('basic', _('Username + Password/API Key'));
+					auth_type.value('token', _('API Token (Bearer)'));
+					auth_type.default = 'basic';
+					auth_type.cfgvalue = function(section_id) {
+						var username = uci.get('ddns', section_id, 'username');
+						return (username === 'Bearer') ? 'token' : 'basic';
+					};
+					auth_type.write = function(section_id, formvalue) {
+						// Don't write directly - username field will handle it
+						return true;
+					};
+
 					o = s.taboption('basic', form.Value, 'username',
 						_("Username"),
-						_("Replaces [USERNAME] in Update-URL (URL-encoded)"));
+						_("Your account email or username")
+						+ '<br /><small style="color:#888;">'
+						+ _("For Cloudflare with API Token: leave empty or set to 'Bearer'")
+						+ '</small>');
 					o.modalonly = true;
-					o.rmempty = false;
+					o.rmempty = true;
+					o.depends('_auth_type', 'basic');
+					o.validate = function(section_id, value) {
+						var auth = this.section.formvalue(section_id, '_auth_type');
+						if (auth === 'basic' && !value)
+							return _('Username is required for basic authentication');
+						return true;
+					};
+
+					// Hidden username field for token auth - auto-set to Bearer
+					var username_token = s.taboption('basic', form.DummyValue, '_username_token',
+						_("Username"));
+					username_token.modalonly = true;
+					username_token.depends('_auth_type', 'token');
+					username_token.rawhtml = true;
+					username_token.cfgvalue = function() {
+						return '<code>Bearer</code> <small style="color:#888;">(' + _('Auto-set for API Token mode') + ')</small>';
+					};
 
 					o = s.taboption('basic', form.Value, 'password',
-						_("Password"),
-						_("Replaces [PASSWORD] in Update-URL (URL-encoded)")
-						+ '<br/>' +
-						_("A.k.a. the TOKEN at e.g. afraid.org"));
+						_("Password / API Key"),
+						_("Your password or Global API Key")
+						+ '<br /><small style="color:#888;">'
+						+ _("Cloudflare: Global API Key from Profile → API Tokens")
+						+ '</small>');
 					o.password = true;
 					o.modalonly = true;
 					o.rmempty = false;
+					o.depends('_auth_type', 'basic');
+
+					var password_token = s.taboption('basic', form.Value, '_password_token',
+						_("API Token"),
+						_("API Token with Zone:Read and DNS:Edit permissions")
+						+ '<br /><small style="color:#888;">'
+						+ _("Cloudflare: Create at Profile → API Tokens → Create Token")
+						+ '</small>');
+					password_token.password = true;
+					password_token.modalonly = true;
+					password_token.rmempty = false;
+					password_token.depends('_auth_type', 'token');
+					password_token.cfgvalue = function(section_id) {
+						var username = uci.get('ddns', section_id, 'username');
+						if (username === 'Bearer')
+							return uci.get('ddns', section_id, 'password');
+						return '';
+					};
+					password_token.write = function(section_id, formvalue) {
+						uci.set('ddns', section_id, 'username', 'Bearer');
+						uci.set('ddns', section_id, 'password', formvalue);
+						return true;
+					};
 
 					o = s.taboption('advanced', form.ListValue, 'ip_source',
 						_("IP address source"),
@@ -1298,12 +1456,16 @@ return view.extend({
 						});
 
 						var dropdownEl = dropdownWidget.render();
+						
+						// Limit dropdown width so button stays close
+						dropdownEl.style.maxWidth = '400px';
+						dropdownEl.style.flex = '0 1 auto';
 
 						// Refresh button
 						var refresh = E('button', {
 							'class': 'cbi-button cbi-button-action',
 							'type': 'button',
-							'style': 'margin-left:8px; flex-shrink:0;'
+							'style': 'margin-left:8px; white-space:nowrap;'
 						}, [ _('Scan') ]);
 
 						// Status display
@@ -1314,14 +1476,13 @@ return view.extend({
 
 						// Control row with dropdown and refresh button
 						var controlRow = E('div', {
-							'class': 'control-group',
-							'style': 'display:flex; align-items:center; flex-wrap:wrap; gap:4px;'
+							'style': 'display:flex; align-items:center; justify-content:flex-start;'
 						}, [
-							E('div', { 'style': 'flex:1; min-width:200px;' }, dropdownEl),
+							dropdownEl,
 							refresh
 						]);
 
-						var wrapper = E('div', { 'style': 'width:100%;' }, [
+						var wrapper = E('div', {}, [
 							controlRow,
 							status
 						]);
@@ -1623,6 +1784,16 @@ return view.extend({
 						_("File") + ': "' + logdir + '/' + section_id + '.log"';
 						return uci.get('ddns', section_id, 'use_logfile');
 					};
+
+					o = s.taboption("advanced", form.Value, "param_opt",
+						_("Optional Parameters"),
+						_("OPTIONAL: Additional parameters for update scripts (key=value pairs separated by space).")
+						+ "<br />" +
+						_("Cloudflare example: zone_id=xxx dns_record_id=xxx api_token=xxx"));
+					o.optional = true;
+					o.rmempty = true;
+					o.modalonly = true;
+					o.placeholder = "zone_id=xxx dns_record_id=xxx";
 
 
 					o = s.taboption("timer", form.Value, "check_interval",
